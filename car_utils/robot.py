@@ -9,21 +9,10 @@ from threading import Timer
 import numpy as np
 import yaml
 
-try:
-    from .agilex_api import HttpClient, WSClient, png_coordinate_to_map, GLOBAL_STATUS_DICT, GLOBAL_CONTROL_MODE_DICT, \
-        quaternion_to_euler_dict, quaternion_to_euler
-    from .point_cloud_process import obstacle_detect
-    from .task_config import global_logger
-    from .tools import smooth_acc, calculate_vector_angle, cal_distance
-    from .QR_detect import QR_Detector
-except:
-
-    from agilex_api import HttpClient, WSClient, png_coordinate_to_map, GLOBAL_STATUS_DICT, GLOBAL_CONTROL_MODE_DICT, \
-        quaternion_to_euler_dict, quaternion_to_euler
-    from point_cloud_process import obstacle_detect
-    from task_config import global_logger
-    from tools import smooth_acc, calculate_vector_angle, cal_distance
-    from QR_detect import QR_Detector
+from agilex_api import HttpClient, WSClient, png_coordinate_to_map, GLOBAL_STATUS_DICT, GLOBAL_CONTROL_MODE_DICT, \
+    quaternion_to_euler_dict
+from task_config import global_logger
+from tools import smooth_acc, calculate_vector_angle, cal_distance
 
 ws_url = "ws://192.168.1.102:9090"  # 填写实际的机器人IP地址
 http_url = "http://192.168.1.102/apiUrl"
@@ -96,7 +85,6 @@ class Robot():
         self.move_distance = 0  ## 机器人移动的距离
         self.rotate_angular = 0  ## 机器人转动的角度
         ##
-        self.QR_detector = QR_Detector()
 
     def _load_config(self):
         # file_path = os.path.abspath(__file__)
@@ -318,53 +306,6 @@ class Robot():
         ## 当有容忍误差时， 采用自定义判断方式
         return _is_near_target(error_threshold=error_threshold)
 
-    # def create_map(self, map_name="office"):
-    #     time_1 = 5
-    #     time_2 = 5
-    #
-    #     ## 录制bag数据包
-    #     self.ws_client.record_bag(optype="start", filename=map_name)
-    #     time.sleep(time_1)
-    #     self.ws_client.record_bag(optype="stop", filename=map_name)
-    #     time.sleep(time_2)
-    #
-    #     ## 进行3D建图
-    #     self.ws_client.mapping_3d(optype="start", filename=map_name)
-    #     time.sleep(time_1)
-    #     self.ws_client.mapping_3d(optype="stop", filename=map_name)
-    #     time.sleep(time_2)
-    #
-    #     ## 进行2D建图
-    #     self.ws_client.mapping_2d(optype="start", filename=map_name)
-    #     time.sleep(time_1)
-    #     self.ws_client.mapping_2d(optype="stop", filename=map_name)
-    #     time.sleep(time_2)
-    #
-    #     # ###获取地图列表
-    #     self.http_client.get_maplist()
-    #     print(f"地图列表：{self.http_client.map_list}")
-
-    # def run_cruise_task(self):
-    #     # 给一个巡航点， 执行一次移动到巡航点任务
-    #     # 由于是在外部定时器中执行， 所以需要判断是否已经发过巡航指令， 避免重复发送
-    #     if not self.is_cruise_command_send:
-    #         self.is_cruise_command_send = True
-    #
-    #         target_pose = cruise_points_dict.get(cruise_point_name_list[self.cruise_points_index_cur])
-    #         global_logger.info(f"准备执行巡航任务， 巡航点名称：{cruise_point_name_list[self.cruise_points_index_cur]}")
-    #         self.move_to_target(target_pos=target_pose)
-    #
-    #     ## 更新巡航点
-    #     if self.is_task_finished:
-    #         global_logger.info(
-    #             f"当前巡航点： {cruise_point_name_list[self.cruise_points_index_cur]}完成")
-    #         self.cruise_points_index_cur += 1
-    #         self.cruise_points_index_cur = self.cruise_points_index_cur % self.total_cruise_point_num
-    #         global_logger.info(f"下一个巡航点： {cruise_point_name_list[self.cruise_points_index_cur]} 即将开始")
-    #         self.is_cruise_command_send = False  # 状态复位
-    #         self.is_task_finished = False  # 状态复位
-    #         self.is_task_running = False
-
     def _coord_transform(self, png_coord):
         if self.map_info is not None:
             map_x, map_y = png_coordinate_to_map(pos=png_coord, map_info=self.map_info)
@@ -388,11 +329,11 @@ class Robot():
         self.ws_client.change_map(filename=new_map_name)
         _, cur_map_name = self.get_nav_status(need_map_name=True)
         max_try_time = 10
-       # for i in range(max_try_time):
+        # for i in range(max_try_time):
         #    if cur_map_name == new_map_name:
-         #       return True
-          #  time.sleep(0.05)
-           # self.ws_client.change_map(filename=new_map_name)
+        #       return True
+        #  time.sleep(0.05)
+        # self.ws_client.change_map(filename=new_map_name)
         return True
 
     def check_robot_status(self, map_name=None):
@@ -519,48 +460,6 @@ class Robot():
             global_logger.warning(f"无导航下移动底盘， 目标距离：{goal_distance}")
             for i in range(linear_ticks):
                 self.ws_client.naive_move(vel_linear_x=vel_linear_x, vel_linear_y=vel_linear_y)
-                time.sleep(1 / rate)
-
-    def naive_move_with_obstacle_avoid(self, goal_distance=0, goal_angular=0):
-
-        safe_distance = 0.3  # m
-
-        rate = 10
-        vel_linear = 0.3  # m/s
-        vel_angular = 1  # rad/s
-        vel_angular = 1  # rad/s
-        if goal_distance < 0:
-            vel_linear = -1 * vel_linear
-        if goal_angular < 0:
-            vel_angular = -1 * vel_angular
-
-        ## 先转动角度， 然后直线移动
-        angular_duration = goal_angular / 57.3 / vel_angular
-        angular_ticks = int(abs(rate * angular_duration))
-
-        linear_duration = goal_distance / vel_linear
-        linear_ticks = int(abs(rate * linear_duration))
-
-        self.ws_client.navigation(optype="start", filename=self.map_name)
-
-        global_logger.warning(f"无导航下转动底盘， 目标角度：{goal_angular}")
-
-        idx = 0
-        while idx <= angular_ticks:
-            point_cloud = self.ws_client.get_pointCloud2_compress()
-            obstacle_dis = obstacle_detect(point_cloud_data=point_cloud)
-            if obstacle_dis is not None and obstacle_dis >= safe_distance:
-                self.ws_client.naive_move(vel_linear=0, vel_angular=vel_angular)
-                time.sleep(1 / rate)
-                idx += 1
-
-        global_logger.warning(f"无导航下移动底盘， 目标距离：{goal_distance}")
-        idx = 0
-        while idx <= linear_ticks:
-            point_cloud = self.ws_client.get_pointCloud2_compress()
-            obstacle_dis = obstacle_detect(point_cloud_data=point_cloud)
-            if obstacle_dis is not None and obstacle_dis >= safe_distance:
-                self.ws_client.naive_move(vel_linear=vel_linear, vel_angular=0)
                 time.sleep(1 / rate)
 
     def status_monitor(self):
@@ -1084,178 +983,6 @@ def uint8_to_float32(uint8_list):
 def generate_xyz(xyz_uint):
     x, y, z = uint8_to_float32(xyz_uint[:4]), uint8_to_float32(xyz_uint[4:8]), uint8_to_float32(xyz_uint[8:12])
     return [x, y, z]
-
-
-# def point_cloud_test():
-#     robot = Robot()
-#     print(f"开启导航...")
-#     robot.ws_client.navigation(optype="start", filename="room_306")
-#     print(f"订阅激光雷达点云数据...")
-#     robot.ws_client.sub_pointCloud2_compress()
-#
-#     for scan_id in range(1000):
-#         data = robot.ws_client.get_pointCloud2_compress()
-#
-#         if data is not None:
-#             point_cloud = list(map(generate_xyz, data))
-#             point_cloud = np.array(point_cloud)
-#             print(f"点云大小： {point_cloud.shape}")
-#             # print(point_cloud[:5])
-#
-#             time_start = time.time()
-#             obstacle_dis = obstacle_detect(point_cloud_data=point_cloud)
-#             print(f"处理耗时： {time.time() - time_start}")
-#             # print(f"最近障碍物距离：{obstacle_dis}")
-#             # save_point = np.zeros(shape=(data.shape[0], 3))
-#             # init_x, init_y, init_z = data[:, :4], data[:, 4:8], data[:, 8:12]
-#             # for i in range(len(save_point)):
-#             #     x, y, z = uint8_to_float32(init_x[i]), uint8_to_float32(init_y[i]), uint8_to_float32(init_z[i])
-#             #     save_point[i][0] = x
-#             #     save_point[i][1] = y
-#             #     save_point[i][2] = z
-#             #
-#             # print("*" * 20, save_point.shape)
-#             #
-#             # np.save("point_cloud.npy", save_point)
-#             # write_ply_file_by_plyfile(point_list=point_cloud, point_cloud_file=f"point_cloud_{scan_id}.ply")
-#
-#         time.sleep(0.1)
-
-def point_cloud_test():
-    robot = Robot()
-    print(f"开启导航...")
-    robot.ws_client.navigation(optype="start", filename="room_306")
-    print(f"订阅激光雷达点云数据...")
-    robot.ws_client.sub_pointCloud2_compress()
-
-    for scan_id in range(10000000):
-        data = robot.ws_client.get_pointCloud2_compress()
-        time_start = time.time()
-        obstacle_dis = obstacle_detect(data)
-        print(f"点云处理耗时：{time.time() - time_start}")
-
-        # if data is not None:
-        #     point_cloud = list(map(generate_xyz, data))
-        #     point_cloud = np.array(point_cloud)
-        #     print(f"点云大小： {point_cloud.shape}")
-        #     # print(point_cloud[:5])
-        #
-        #     time_start = time.time()
-        #     obstacle_dis = obstacle_detect(point_cloud_data=point_cloud)
-        #     print(f"处理耗时： {time.time() - time_start}")
-        #     # print(f"最近障碍物距离：{obstacle_dis}")
-        # save_point = np.zeros(shape=(data.shape[0], 3))
-        # init_x, init_y, init_z = data[:, :4], data[:, 4:8], data[:, 8:12]
-        # for i in range(len(save_point)):
-        #     x, y, z = uint8_to_float32(init_x[i]), uint8_to_float32(init_y[i]), uint8_to_float32(init_z[i])
-        #     save_point[i][0] = x
-        #     save_point[i][1] = y
-        #     save_point[i][2] = z
-        #
-        # print("*" * 20, save_point.shape)
-        #
-        # np.save("point_cloud.npy", save_point)
-        # write_ply_file_by_plyfile(point_list=point_cloud, point_cloud_file=f"point_cloud_{scan_id}.ply")
-
-        time.sleep(0.1)
-
-
-def save_point_cloud(data, save_name='point_cloud.ply'):
-    import plyfile
-
-    face = np.array([0, 1, 2])
-
-    # 保存为PLY文件
-    ply = plyfile.PlyElement.describe(np.array(data), 'vertex', comments=['vertices'])
-    ply['face'] = plyfile.PlyElement(face, 'face')
-    ply.write(save_name)
-    print(f"点云文件已保存：{save_name}")
-
-
-def write_ply_file_by_plyfile(point_list, point_cloud_file):
-    import plyfile
-    print("Writting PLY file".center(120, "="))
-    points = [(point_list[i, 0], point_list[i, 1], point_list[i, 2]) for i in range(point_list.shape[0])]
-    points = np.array(points, dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4')])
-    color = [(255, 255, 255)] * point_list.shape[0]
-    color = np.array(color, dtype=[('red', 'uint8'), ('green', 'uint8'), ('blue', 'uint8')])
-
-    # 定义PLY元素格式：这里我们只定义了一个名为vertex的元素，包含x、y、z属性
-    vertex_element = plyfile.PlyElement.describe(points, name='vertex', comments=['x', 'y', 'z'])
-    color = plyfile.PlyElement.describe(color, name="color", comments=['red', 'green', 'blue'])
-
-    # 创建PlyData对象并写入PLY文件
-    # 设置text=False并指定字节序为little_endian， 使用二进制格式会是的文件存储更小，但是里面的信息就不是文本了。如果不想要二进制存储，只需要将text设置为True就好了。
-    ply_data = plyfile.PlyData([vertex_element, color], text=True, byte_order='<')
-    ply_data.write(point_cloud_file)
-    print(f"点云{point_cloud_file}存储完成!\n")
-
-
-def imu_test():
-    robot = Robot()
-    print(f"开启导航...")
-
-    time_start = time.time()
-    # robot.ws_client.navigation(optype="start", filename="room_306")
-    robot.ws_client.sub_imu_data()
-
-    v0 = 0
-    s0 = 0
-
-    acc_offset_norm = 9.827884938199292
-    acc_list = []  # 长度120
-    time_last = None
-
-    init_acc = []
-    smooth_acc = []
-
-    while time.time() - time_start <= 10:
-        imu_data = robot.ws_client.get_imu_data()
-
-        if imu_data is not None:
-            time_now = time.time()
-            if time_last is None:
-                delta_t = 0
-            else:
-                delta_t = time_now - time_last
-            acc = imu_data.get("linear_acceleration")
-            acc_x, acc_y, acc_z = acc.get("x"), acc.get("y"), acc.get("z")
-            yaw = quaternion_to_euler_dict(ori=imu_data.get("orientation"))
-
-            acc_norm = np.sqrt(np.square(acc_x) + np.square(acc_y) + np.square(acc_z))
-
-            acc_list.append(acc_norm)
-            acc_list = acc_list[-60:]
-
-            if len(acc_list) < 60:
-                continue
-
-            acc_smooth = smooth_acc(acc_list)[-1]
-            init_acc.append(acc_norm)
-            smooth_acc.append(acc_smooth)
-            # # acc_y = acc.get("y")
-            # # acc_y = acc_y -acc_offset_y
-            #
-            # acc_y = acc_norm - acc_offset_norm
-
-            v = v0 + acc_smooth * delta_t
-            s = s0 + (v0 + v) / 2 * delta_t
-
-            v0 = v
-            s0 = s
-
-            # print(f"加速度：{acc_norm}")
-            acc_list.append(acc_norm)
-            print(f"当前速度：{v}, delta_t: {delta_t} 当前移动距离y：{s} ")
-            time_last = time_now
-        time.sleep(0.004)
-
-    print(f"平均加速度： {np.mean(acc_list)}")
-
-    import matplotlib.pyplot as plt
-    plt.plot(range(len(init_acc)), init_acc - np.mean(acc_list), 'r')
-    plt.plot(range(len(smooth_acc)), smooth_acc, 'g')
-    plt.show()
 
 
 if __name__ == '__main__':
